@@ -4,7 +4,13 @@ import { v2 as cloudinary } from "cloudinary";
 import path from "path";
 import dotenv from "dotenv";
 
-dotenv.config({ override: true, quiet: true } as any);
+// In development (AI Studio), we want to override stale environment variables with the .env file.
+// In production (Render), we want the OS-level environment variables to take precedence.
+if (process.env.NODE_ENV !== "production") {
+  dotenv.config({ override: true, quiet: true } as any);
+} else {
+  dotenv.config({ quiet: true } as any);
+}
 
 // Configure Cloudinary with user's credentials
 cloudinary.config({
