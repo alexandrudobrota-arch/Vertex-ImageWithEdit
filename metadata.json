@@ -1,0 +1,5 @@
+{
+  "name": "Multi-Aspect Image Generator",
+  "description": "Generates 4 images sequentially in different aspect ratios using Gemini 3.1 Flash Image Preview, with optional Cloudinary upload.",
+  "requestFramePermissions": []
+}
