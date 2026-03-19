@@ -8,9 +8,7 @@ dotenv.config();
 
 // Configure Cloudinary with user's credentials
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || "dklokqpbt",
-  api_key: process.env.CLOUDINARY_API_KEY || "167633359637226",
-  api_secret: process.env.CLOUDINARY_API_SECRET || "gAUxW4Po9219zkk1YNWPrire4k4",
+  
 });
 
 async function startServer() {
