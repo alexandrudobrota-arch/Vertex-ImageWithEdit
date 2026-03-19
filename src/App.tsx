@@ -108,7 +108,7 @@ function MainApp() {
       </header>
 
       <main className="max-w-5xl mx-auto p-6">
-        {activeTab === 'generate' ? (
+        <div className={activeTab === 'generate' ? 'block' : 'hidden'}>
           <GenerateTab 
             model={model} 
             folders={folders}
@@ -116,7 +116,8 @@ function MainApp() {
             setSelectedFolder={setSelectedFolder}
             onEnlarge={setEnlargedImage} 
           />
-        ) : activeTab === 'magic-edit' ? (
+        </div>
+        <div className={activeTab === 'magic-edit' ? 'block' : 'hidden'}>
           <MagicEditTab 
             model={model} 
             folders={folders}
@@ -124,12 +125,14 @@ function MainApp() {
             setSelectedFolder={setSelectedFolder}
             onEnlarge={setEnlargedImage} 
           />
-        ) : (
+        </div>
+        <div className={activeTab === 'folders' ? 'block' : 'hidden'}>
           <FoldersTab 
             folders={folders}
             onEnlarge={setEnlargedImage}
+            isActive={activeTab === 'folders'}
           />
-        )}
+        </div>
       </main>
 
       {/* Lightbox */}
@@ -217,6 +220,27 @@ function GenerateTab({ model, folders, selectedFolder, setSelectedFolder, onEnla
   const [numImages, setNumImages] = useState(4);
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [imageSize, setImageSize] = useState("1K");
+  
+  const [folderImages, setFolderImages] = useState<any[]>([]);
+  const [loadingFolderImages, setLoadingFolderImages] = useState(false);
+
+  const fetchFolderImages = () => {
+    if (!selectedFolder) return;
+    setLoadingFolderImages(true);
+    fetch(`/api/images/${encodeURIComponent(selectedFolder)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setFolderImages(data);
+        }
+      })
+      .catch(err => console.error("Failed to fetch folder images", err))
+      .finally(() => setLoadingFolderImages(false));
+  };
+
+  useEffect(() => {
+    fetchFolderImages();
+  }, [selectedFolder]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -255,10 +279,45 @@ function GenerateTab({ model, folders, selectedFolder, setSelectedFolder, onEnla
       const data = await res.json();
       if (data.secure_url) {
         setResults(prev => prev.map(r => r.id === id ? { ...r, cloudinaryUrl: data.secure_url } : r));
+        fetchFolderImages();
+      } else if (data.error) {
+        console.error("Cloudinary upload error:", data.error);
       }
     } catch (err) {
       console.error("Cloudinary upload error:", err);
     }
+  };
+
+  const resizeImage = (base64Str: string, maxWidth = 1024): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        
+        if (width > maxWidth || height > maxWidth) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxWidth) / height);
+            height = maxWidth;
+          }
+        }
+        
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', 0.8));
+        } else {
+          resolve(base64Str);
+        }
+      };
+      img.src = base64Str;
+    });
   };
 
   const handleGenerate = async () => {
@@ -276,11 +335,17 @@ function GenerateTab({ model, folders, selectedFolder, setSelectedFolder, onEnla
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || process.env.GEMINI_API_KEY });
     const parts: any[] = [];
     if (prompt.trim()) parts.push({ text: prompt });
-    referenceImages.forEach(img => {
-      parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
-    });
+    
+    // Resize reference images to prevent 503 timeouts
+    for (const img of referenceImages) {
+      const resizedUrl = await resizeImage(img.url);
+      const resizedData = resizedUrl.split(',')[1];
+      const resizedMimeType = resizedUrl.split(';')[0].split(':')[1];
+      parts.push({ inlineData: { data: resizedData, mimeType: resizedMimeType } });
+    }
 
-    const promises = initialResults.map(async (initRes) => {
+    // Process sequentially to avoid 503 timeout from Gemini API
+    for (const initRes of initialResults) {
       try {
         const response = await ai.models.generateContent({
           model: model,
@@ -314,9 +379,8 @@ function GenerateTab({ model, folders, selectedFolder, setSelectedFolder, onEnla
           : err.message || 'Generation failed';
         setResults(prev => prev.map(r => r.id === initRes.id ? { ...r, status: 'error', error: errorMsg } : r));
       }
-    });
+    }
 
-    await Promise.all(promises);
     setIsGenerating(false);
   };
 
@@ -379,6 +443,40 @@ function GenerateTab({ model, folders, selectedFolder, setSelectedFolder, onEnla
             className="w-full h-24 p-4 bg-[#0e1117] border border-[#31333F] rounded-xl focus:ring-2 focus:ring-[#FF4B4B] focus:border-[#FF4B4B] outline-none resize-none transition-all"
             disabled={isGenerating}
           />
+        </div>
+
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-sm font-medium text-gray-300">Images in "{selectedFolder}"</label>
+            <button 
+              onClick={fetchFolderImages}
+              className="text-xs text-indigo-400 hover:text-indigo-300"
+            >
+              Refresh
+            </button>
+          </div>
+          <div className="bg-[#0e1117] border border-[#31333F] rounded-xl p-4 min-h-[120px]">
+            {loadingFolderImages ? (
+              <div className="flex justify-center items-center h-full py-4">
+                <Loader2 className="w-6 h-6 text-indigo-500 animate-spin" />
+              </div>
+            ) : folderImages.length > 0 ? (
+              <div className="flex gap-3 overflow-x-auto pb-2 snap-x">
+                {folderImages.map(img => (
+                  <div key={img.public_id} className="relative flex-shrink-0 w-24 h-24 rounded-lg overflow-hidden border border-[#31333F] group snap-start cursor-pointer" onClick={() => onEnlarge(img.url)}>
+                    <img src={img.url} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="Cloudinary" />
+                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <Maximize className="w-4 h-4 text-white" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center text-gray-500 py-4 text-sm">
+                No images found in this folder.
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -586,8 +684,38 @@ function MagicEditTab({ model, folders, selectedFolder, setSelectedFolder, onEnl
     setBaseMimeType(file.type);
     const reader = new FileReader();
     reader.onloadend = () => {
-      setBaseImage(reader.result as string);
-      setResultUrl(null);
+      const base64Str = reader.result as string;
+      
+      // Resize base image to prevent 503 timeouts
+      const img = new Image();
+      img.onload = () => {
+        const maxWidth = 1024;
+        let width = img.width;
+        let height = img.height;
+        
+        if (width > maxWidth || height > maxWidth) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxWidth) / height);
+            height = maxWidth;
+          }
+        }
+        
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          setBaseImage(canvas.toDataURL('image/jpeg', 0.8));
+        } else {
+          setBaseImage(base64Str);
+        }
+        setResultUrl(null);
+      };
+      img.src = base64Str;
     };
     reader.readAsDataURL(file);
     e.target.value = '';
@@ -876,7 +1004,7 @@ function MagicEditTab({ model, folders, selectedFolder, setSelectedFolder, onEnl
   );
 }
 
-function FoldersTab({ folders, onEnlarge }: { folders: string[], onEnlarge: (url: string) => void }) {
+function FoldersTab({ folders, onEnlarge, isActive }: { folders: string[], onEnlarge: (url: string) => void, isActive: boolean }) {
   const [selectedFolder, setSelectedFolder] = useState<string>('start');
   const [images, setImages] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -887,10 +1015,10 @@ function FoldersTab({ folders, onEnlarge }: { folders: string[], onEnlarge: (url
     }
   }, [folders, selectedFolder]);
 
-  useEffect(() => {
+  const fetchImages = () => {
     if (!selectedFolder) return;
     setLoading(true);
-    fetch(`/api/images/${selectedFolder}`)
+    fetch(`/api/images/${encodeURIComponent(selectedFolder)}`)
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -899,21 +1027,35 @@ function FoldersTab({ folders, onEnlarge }: { folders: string[], onEnlarge: (url
       })
       .catch(err => console.error("Failed to fetch images", err))
       .finally(() => setLoading(false));
-  }, [selectedFolder]);
+  };
+
+  useEffect(() => {
+    if (isActive) {
+      fetchImages();
+    }
+  }, [selectedFolder, isActive]);
 
   return (
     <div className="bg-[#262730] rounded-2xl shadow-sm border border-[#31333F] p-6 mb-8">
       <div className="mb-6 flex items-center justify-between">
         <h2 className="text-lg font-medium text-white">Cloudinary Folders</h2>
-        <select 
-          value={selectedFolder}
-          onChange={e => setSelectedFolder(e.target.value)}
-          className="px-4 py-2 border border-[#31333F] rounded-xl bg-[#0e1117] focus:ring-2 focus:ring-[#FF4B4B] outline-none text-sm"
-        >
-          {folders.map(f => (
-            <option key={f} value={f}>{f}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={fetchImages}
+            className="text-sm text-gray-400 hover:text-white transition-colors"
+          >
+            Refresh
+          </button>
+          <select 
+            value={selectedFolder}
+            onChange={e => setSelectedFolder(e.target.value)}
+            className="px-4 py-2 border border-[#31333F] rounded-xl bg-[#0e1117] focus:ring-2 focus:ring-[#FF4B4B] outline-none text-sm"
+          >
+            {folders.map(f => (
+              <option key={f} value={f}>{f}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {loading ? (

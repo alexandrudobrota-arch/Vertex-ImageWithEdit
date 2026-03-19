@@ -4,11 +4,13 @@ import { v2 as cloudinary } from "cloudinary";
 import path from "path";
 import dotenv from "dotenv";
 
-dotenv.config();
+dotenv.config({ override: true, quiet: true } as any);
 
 // Configure Cloudinary with user's credentials
 cloudinary.config({
-  
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
 async function startServer() {
@@ -20,29 +22,52 @@ async function startServer() {
   // API Routes
   app.get("/api/folders", async (req, res) => {
     try {
-      // Fetch root folders
-      const result = await cloudinary.api.root_folders();
-      const folders = result.folders.map((f: any) => f.name);
+      let allFolders: string[] = [];
+      
+      // Helper function to recursively fetch folders
+      async function fetchFolders(path?: string) {
+        try {
+          const result = path 
+            ? await cloudinary.api.sub_folders(path)
+            : await cloudinary.api.root_folders();
+            
+          if (result && result.folders) {
+            for (const folder of result.folders) {
+              allFolders.push(folder.path || folder.name);
+              // Recursively fetch subfolders
+              await fetchFolders(folder.path || folder.name);
+            }
+          }
+        } catch (e: any) {
+          // Ignore errors for empty subfolders or permission issues on specific folders
+          console.error(`Error fetching folders for path ${path || 'root'}:`, e.message);
+        }
+      }
+      
+      await fetchFolders(); // Fetch root folders
       
       // Ensure "start" folder exists in the list
-      if (!folders.includes("start")) {
-        folders.push("start");
+      if (!allFolders.includes("start")) {
+        allFolders.push("start");
       }
       
       // Ensure "MAI with Edit" folder exists in the list
-      if (!folders.includes("MAI with Edit")) {
+      if (!allFolders.includes("MAI with Edit")) {
         try {
           await cloudinary.api.create_folder("MAI with Edit");
-          folders.push("MAI with Edit");
+          allFolders.push("MAI with Edit");
         } catch (e) {
           console.error("Failed to create MAI with Edit folder", e);
         }
       }
       
-      res.json(folders);
+      // Remove duplicates just in case
+      const uniqueFolders = [...new Set(allFolders)];
+      
+      res.json(uniqueFolders);
     } catch (error: any) {
       console.error("Error fetching folders:", error);
-      res.status(500).json({ error: "Failed to fetch folders" });
+      res.status(500).json({ error: "Failed to fetch folders", details: error.message });
     }
   });
 
